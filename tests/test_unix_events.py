@@ -1,6 +1,7 @@
 """Tests for unix_events.py."""
 
 import collections
+import contextlib
 import errno
 import io
 import os
@@ -33,6 +34,33 @@ def close_pipe_transport(transport):
         return
     transport._pipe.close()
     transport._pipe = None
+
+
+@contextlib.contextmanager
+def patched_os_writev():
+
+    class Wrapper:
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+
+        def __call__(self, fd, buffers):
+            return self._wrapped(fd, list(buffers))
+
+        def __getattr__(self, name):
+            if name.startswith('_'):
+                return object.__getattr__(self, name)
+            else:
+                return getattr(self._wrapped, name)
+
+        def __setattr__(self, name, val):
+            if name.startswith('_'):
+                object.__setattr__(self, name, val)
+            else:
+                setattr(self._wrapped, name, val)
+
+    m_writev = Wrapper(mock.Mock())
+    with mock.patch('os.writev', m_writev):
+        yield m_writev
 
 
 @unittest.skipUnless(signal, 'Signals are not supported')
@@ -602,86 +630,86 @@ class UnixWritePipeTransportTests(test_utils.TestCase):
         test_utils.run_briefly(self.loop)
         self.protocol.connection_lost.assert_called_with(None)
 
-    @mock.patch('os.writev')
-    def test__write_ready(self, m_writev):
-        tr = self.write_pipe_transport()
-        self.loop.add_writer(5, tr._write_ready)
-        tr._buffer.extend([b'da', b'ta'])
-        m_writev.return_value = 4
-        tr._write_ready()
-        m_writev.assert_called_with(5, [b'da', b'ta'])
-        self.assertFalse(self.loop.writers)
-        self.assertEqual([], list(tr._buffer))
+    def test__write_ready(self):
+        with patched_os_writev() as m_writev:
+            tr = self.write_pipe_transport()
+            self.loop.add_writer(5, tr._write_ready)
+            tr._buffer.extend([b'da', b'ta'])
+            m_writev.return_value = 4
+            tr._write_ready()
+            m_writev.assert_called_with(5, [b'da', b'ta'])
+            self.assertFalse(self.loop.writers)
+            self.assertEqual([], list(tr._buffer))
 
-    @mock.patch('os.writev')
-    def test__write_ready_partial(self, m_writev):
-        tr = self.write_pipe_transport()
-        self.loop.add_writer(5, tr._write_ready)
-        tr._buffer.extend([b'da', b'ta'])
-        m_writev.return_value = 3
-        tr._write_ready()
-        m_writev.assert_called_with(5, [b'da', b'ta'])
-        self.loop.assert_writer(5, tr._write_ready)
-        self.assertEqual([b'a'], list(tr._buffer))
+    def test__write_ready_partial(self):
+        with patched_os_writev() as m_writev:
+            tr = self.write_pipe_transport()
+            self.loop.add_writer(5, tr._write_ready)
+            tr._buffer.extend([b'da', b'ta'])
+            m_writev.return_value = 3
+            tr._write_ready()
+            m_writev.assert_called_with(5, [b'da', b'ta'])
+            self.loop.assert_writer(5, tr._write_ready)
+            self.assertEqual([b'a'], list(tr._buffer))
 
-    @mock.patch('os.writev')
-    def test__write_ready_again(self, m_writev):
-        tr = self.write_pipe_transport()
-        self.loop.add_writer(5, tr._write_ready)
-        tr._buffer.extend([b'da', b'ta'])
-        m_writev.side_effect = BlockingIOError()
-        tr._write_ready()
-        m_writev.assert_called_with(5, [b'da', b'ta'])
-        self.loop.assert_writer(5, tr._write_ready)
-        self.assertEqual([b'da', b'ta'], list(tr._buffer))
+    def test__write_ready_again(self):
+        with patched_os_writev() as m_writev:
+            tr = self.write_pipe_transport()
+            self.loop.add_writer(5, tr._write_ready)
+            tr._buffer.extend([b'da', b'ta'])
+            m_writev.side_effect = BlockingIOError()
+            tr._write_ready()
+            m_writev.assert_called_with(5, [b'da', b'ta'])
+            self.loop.assert_writer(5, tr._write_ready)
+            self.assertEqual([b'da', b'ta'], list(tr._buffer))
 
-    @mock.patch('os.writev')
-    def test__write_ready_empty(self, m_writev):
-        tr = self.write_pipe_transport()
-        self.loop.add_writer(5, tr._write_ready)
-        tr._buffer.extend([b'da', b'ta'])
-        m_writev.return_value = 0
-        tr._write_ready()
-        m_writev.assert_called_with(5, [b'da', b'ta'])
-        self.loop.assert_writer(5, tr._write_ready)
-        self.assertEqual([b'da', b'ta'], list(tr._buffer))
+    def test__write_ready_empty(self):
+        with patched_os_writev() as m_writev:
+            tr = self.write_pipe_transport()
+            self.loop.add_writer(5, tr._write_ready)
+            tr._buffer.extend([b'da', b'ta'])
+            m_writev.return_value = 0
+            tr._write_ready()
+            m_writev.assert_called_with(5, [b'da', b'ta'])
+            self.loop.assert_writer(5, tr._write_ready)
+            self.assertEqual([b'da', b'ta'], list(tr._buffer))
 
     @mock.patch('asyncio.log.logger.error')
-    @mock.patch('os.writev')
-    def test__write_ready_err(self, m_writev, m_logexc):
-        tr = self.write_pipe_transport()
-        self.loop.add_writer(5, tr._write_ready)
-        tr._buffer.extend([b'da', b'ta'])
-        m_writev.side_effect = err = OSError()
-        tr._write_ready()
-        m_writev.assert_called_with(5, [b'da', b'ta'])
-        self.assertFalse(self.loop.writers)
-        self.assertFalse(self.loop.readers)
-        self.assertEqual([], list(tr._buffer))
-        self.assertTrue(tr.is_closing())
-        m_logexc.assert_called_with(
-            test_utils.MockPattern(
-                'Fatal write error on pipe transport'
-                '\nprotocol:.*\ntransport:.*'),
-            exc_info=(OSError, MOCK_ANY, MOCK_ANY))
-        self.assertEqual(1, tr._conn_lost)
-        test_utils.run_briefly(self.loop)
-        self.protocol.connection_lost.assert_called_with(err)
+    def test__write_ready_err(self, m_logexc):
+        with patched_os_writev() as m_writev:
+            tr = self.write_pipe_transport()
+            self.loop.add_writer(5, tr._write_ready)
+            tr._buffer.extend([b'da', b'ta'])
+            m_writev.side_effect = err = OSError()
+            tr._write_ready()
+            m_writev.assert_called_with(5, [b'da', b'ta'])
+            self.assertFalse(self.loop.writers)
+            self.assertFalse(self.loop.readers)
+            self.assertEqual([], list(tr._buffer))
+            self.assertTrue(tr.is_closing())
+            m_logexc.assert_called_with(
+                test_utils.MockPattern(
+                    'Fatal write error on pipe transport'
+                    '\nprotocol:.*\ntransport:.*'),
+                exc_info=(OSError, MOCK_ANY, MOCK_ANY))
+            self.assertEqual(1, tr._conn_lost)
+            test_utils.run_briefly(self.loop)
+            self.protocol.connection_lost.assert_called_with(err)
 
-    @mock.patch('os.writev')
-    def test__write_ready_closing(self, m_writev):
-        tr = self.write_pipe_transport()
-        self.loop.add_writer(5, tr._write_ready)
-        tr._closing = True
-        tr._buffer.extend([b'da', b'ta'])
-        m_writev.return_value = 4
-        tr._write_ready()
-        m_writev.assert_called_with(5, [b'da', b'ta'])
-        self.assertFalse(self.loop.writers)
-        self.assertFalse(self.loop.readers)
-        self.assertEqual([], list(tr._buffer))
-        self.protocol.connection_lost.assert_called_with(None)
-        self.pipe.close.assert_called_with()
+    def test__write_ready_closing(self):
+        with patched_os_writev() as m_writev:
+            tr = self.write_pipe_transport()
+            self.loop.add_writer(5, tr._write_ready)
+            tr._closing = True
+            tr._buffer.extend([b'da', b'ta'])
+            m_writev.return_value = 4
+            tr._write_ready()
+            m_writev.assert_called_with(5, [b'da', b'ta'])
+            self.assertFalse(self.loop.writers)
+            self.assertFalse(self.loop.readers)
+            self.assertEqual([], list(tr._buffer))
+            self.protocol.connection_lost.assert_called_with(None)
+            self.pipe.close.assert_called_with()
 
     @mock.patch('os.write')
     def test_abort(self, m_write):

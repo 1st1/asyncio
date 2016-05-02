@@ -519,10 +519,7 @@ class _UnixWritePipeTransport(transports._FlowControlMixin,
         assert self._buffer, 'Data should not be empty'
 
         try:
-            # list() is used only to workaround BUG in @mock.patch('os.writev').
-            # Mock stores internal reference to _buffer, which is then MODIFIED
-            # during this call. That's why we create separate superfluous copy.
-            n = os.writev(self._fileno, list(self._buffer))
+            n = os.writev(self._fileno, self._buffer)
         except (BlockingIOError, InterruptedError):
             return
         except Exception as exc:
