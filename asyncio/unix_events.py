@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import warnings
+import collections
 
 
 from . import base_events
@@ -427,7 +428,7 @@ class _UnixWritePipeTransport(transports._FlowControlMixin,
                              "pipes, sockets and character devices")
         _set_nonblocking(self._fileno)
         self._protocol = protocol
-        self._buffer = []
+        self._buffer = collections.deque()
         self._conn_lost = 0
         self._closing = False  # Set when close() or write_eof() called.
 
@@ -514,32 +515,40 @@ class _UnixWritePipeTransport(transports._FlowControlMixin,
         self._maybe_pause_protocol()
 
     def _write_ready(self):
-        data = b''.join(self._buffer)
-        assert data, 'Data should not be empty'
+        # writing empty chunks to buffer is disallowed earlier
+        assert self._buffer, 'Data should not be empty'
 
-        self._buffer.clear()
         try:
-            n = os.write(self._fileno, data)
+            # list() is used only to workaround BUG in @mock.patch('os.writev').
+            # Mock stores internal reference to _buffer, which is then MODIFIED
+            # during this call. That's why we create separate superfluous copy.
+            n = os.writev(self._fileno, list(self._buffer))
         except (BlockingIOError, InterruptedError):
-            self._buffer.append(data)
+            return
         except Exception as exc:
             self._conn_lost += 1
             # Remove writer here, _fatal_error() doesn't it
             # because _buffer is empty.
             self._loop.remove_writer(self._fileno)
             self._fatal_error(exc, 'Fatal write error on pipe transport')
-        else:
-            if n == len(data):
-                self._loop.remove_writer(self._fileno)
-                self._maybe_resume_protocol()  # May append to buffer.
-                if not self._buffer and self._closing:
-                    self._loop.remove_reader(self._fileno)
-                    self._call_connection_lost(None)
-                return
-            elif n > 0:
-                data = data[n:]
+            return
 
-            self._buffer.append(data)  # Try again later.
+        while n:
+            chunk = self._buffer.popleft()
+            n -= len(chunk)
+            if n < 0:
+                # only part of chunk was written, so push unread part of it back to _buffer
+                self._buffer.appendleft(chunk[n:])
+                break
+
+        if self._buffer:
+            return
+
+        self._loop.remove_writer(self._fileno)
+        self._maybe_resume_protocol()  # May append to buffer.
+        if not self._buffer and self._closing:
+            self._loop.remove_reader(self._fileno)
+            self._call_connection_lost(None)
 
     def can_write_eof(self):
         return True

@@ -518,7 +518,7 @@ class UnixWritePipeTransportTests(test_utils.TestCase):
         tr.write(b'data')
         m_write.assert_called_with(5, b'data')
         self.assertFalse(self.loop.writers)
-        self.assertEqual([], tr._buffer)
+        self.assertEqual([], list(tr._buffer))
 
     @mock.patch('os.write')
     def test_write_no_data(self, m_write):
@@ -526,7 +526,7 @@ class UnixWritePipeTransportTests(test_utils.TestCase):
         tr.write(b'')
         self.assertFalse(m_write.called)
         self.assertFalse(self.loop.writers)
-        self.assertEqual([], tr._buffer)
+        self.assertEqual([], list(tr._buffer))
 
     @mock.patch('os.write')
     def test_write_partial(self, m_write):
@@ -535,7 +535,7 @@ class UnixWritePipeTransportTests(test_utils.TestCase):
         tr.write(b'data')
         m_write.assert_called_with(5, b'data')
         self.loop.assert_writer(5, tr._write_ready)
-        self.assertEqual([b'ta'], tr._buffer)
+        self.assertEqual([b'ta'], list(tr._buffer))
 
     @mock.patch('os.write')
     def test_write_buffer(self, m_write):
@@ -545,7 +545,7 @@ class UnixWritePipeTransportTests(test_utils.TestCase):
         tr.write(b'data')
         self.assertFalse(m_write.called)
         self.loop.assert_writer(5, tr._write_ready)
-        self.assertEqual([b'previous', b'data'], tr._buffer)
+        self.assertEqual([b'previous', b'data'], list(tr._buffer))
 
     @mock.patch('os.write')
     def test_write_again(self, m_write):
@@ -554,7 +554,7 @@ class UnixWritePipeTransportTests(test_utils.TestCase):
         tr.write(b'data')
         m_write.assert_called_with(5, b'data')
         self.loop.assert_writer(5, tr._write_ready)
-        self.assertEqual([b'data'], tr._buffer)
+        self.assertEqual([b'data'], list(tr._buffer))
 
     @mock.patch('asyncio.unix_events.logger')
     @mock.patch('os.write')
@@ -566,7 +566,7 @@ class UnixWritePipeTransportTests(test_utils.TestCase):
         tr.write(b'data')
         m_write.assert_called_with(5, b'data')
         self.assertFalse(self.loop.writers)
-        self.assertEqual([], tr._buffer)
+        self.assertEqual([], list(tr._buffer))
         tr._fatal_error.assert_called_with(
                             err,
                             'Fatal write error on pipe transport')
@@ -602,62 +602,62 @@ class UnixWritePipeTransportTests(test_utils.TestCase):
         test_utils.run_briefly(self.loop)
         self.protocol.connection_lost.assert_called_with(None)
 
-    @mock.patch('os.write')
-    def test__write_ready(self, m_write):
+    @mock.patch('os.writev')
+    def test__write_ready(self, m_writev):
         tr = self.write_pipe_transport()
         self.loop.add_writer(5, tr._write_ready)
-        tr._buffer = [b'da', b'ta']
-        m_write.return_value = 4
+        tr._buffer.extend([b'da', b'ta'])
+        m_writev.return_value = 4
         tr._write_ready()
-        m_write.assert_called_with(5, b'data')
+        m_writev.assert_called_with(5, [b'da', b'ta'])
         self.assertFalse(self.loop.writers)
-        self.assertEqual([], tr._buffer)
+        self.assertEqual([], list(tr._buffer))
 
-    @mock.patch('os.write')
-    def test__write_ready_partial(self, m_write):
+    @mock.patch('os.writev')
+    def test__write_ready_partial(self, m_writev):
         tr = self.write_pipe_transport()
         self.loop.add_writer(5, tr._write_ready)
-        tr._buffer = [b'da', b'ta']
-        m_write.return_value = 3
+        tr._buffer.extend([b'da', b'ta'])
+        m_writev.return_value = 3
         tr._write_ready()
-        m_write.assert_called_with(5, b'data')
+        m_writev.assert_called_with(5, [b'da', b'ta'])
         self.loop.assert_writer(5, tr._write_ready)
-        self.assertEqual([b'a'], tr._buffer)
+        self.assertEqual([b'a'], list(tr._buffer))
 
-    @mock.patch('os.write')
-    def test__write_ready_again(self, m_write):
+    @mock.patch('os.writev')
+    def test__write_ready_again(self, m_writev):
         tr = self.write_pipe_transport()
         self.loop.add_writer(5, tr._write_ready)
-        tr._buffer = [b'da', b'ta']
-        m_write.side_effect = BlockingIOError()
+        tr._buffer.extend([b'da', b'ta'])
+        m_writev.side_effect = BlockingIOError()
         tr._write_ready()
-        m_write.assert_called_with(5, b'data')
+        m_writev.assert_called_with(5, [b'da', b'ta'])
         self.loop.assert_writer(5, tr._write_ready)
-        self.assertEqual([b'data'], tr._buffer)
+        self.assertEqual([b'da', b'ta'], list(tr._buffer))
 
-    @mock.patch('os.write')
-    def test__write_ready_empty(self, m_write):
+    @mock.patch('os.writev')
+    def test__write_ready_empty(self, m_writev):
         tr = self.write_pipe_transport()
         self.loop.add_writer(5, tr._write_ready)
-        tr._buffer = [b'da', b'ta']
-        m_write.return_value = 0
+        tr._buffer.extend([b'da', b'ta'])
+        m_writev.return_value = 0
         tr._write_ready()
-        m_write.assert_called_with(5, b'data')
+        m_writev.assert_called_with(5, [b'da', b'ta'])
         self.loop.assert_writer(5, tr._write_ready)
-        self.assertEqual([b'data'], tr._buffer)
+        self.assertEqual([b'da', b'ta'], list(tr._buffer))
 
     @mock.patch('asyncio.log.logger.error')
-    @mock.patch('os.write')
-    def test__write_ready_err(self, m_write, m_logexc):
+    @mock.patch('os.writev')
+    def test__write_ready_err(self, m_writev, m_logexc):
         tr = self.write_pipe_transport()
         self.loop.add_writer(5, tr._write_ready)
-        tr._buffer = [b'da', b'ta']
-        m_write.side_effect = err = OSError()
+        tr._buffer.extend([b'da', b'ta'])
+        m_writev.side_effect = err = OSError()
         tr._write_ready()
-        m_write.assert_called_with(5, b'data')
+        m_writev.assert_called_with(5, [b'da', b'ta'])
         self.assertFalse(self.loop.writers)
         self.assertFalse(self.loop.readers)
-        self.assertEqual([], tr._buffer)
+        self.assertEqual([], list(tr._buffer))
         self.assertTrue(tr.is_closing())
         m_logexc.assert_called_with(
             test_utils.MockPattern(
@@ -668,18 +668,18 @@ class UnixWritePipeTransportTests(test_utils.TestCase):
         test_utils.run_briefly(self.loop)
         self.protocol.connection_lost.assert_called_with(err)
 
-    @mock.patch('os.write')
-    def test__write_ready_closing(self, m_write):
+    @mock.patch('os.writev')
+    def test__write_ready_closing(self, m_writev):
         tr = self.write_pipe_transport()
         self.loop.add_writer(5, tr._write_ready)
         tr._closing = True
-        tr._buffer = [b'da', b'ta']
-        m_write.return_value = 4
+        tr._buffer.extend([b'da', b'ta'])
+        m_writev.return_value = 4
         tr._write_ready()
-        m_write.assert_called_with(5, b'data')
+        m_writev.assert_called_with(5, [b'da', b'ta'])
         self.assertFalse(self.loop.writers)
         self.assertFalse(self.loop.readers)
-        self.assertEqual([], tr._buffer)
+        self.assertEqual([], list(tr._buffer))
         self.protocol.connection_lost.assert_called_with(None)
         self.pipe.close.assert_called_with()
 
@@ -688,12 +688,12 @@ class UnixWritePipeTransportTests(test_utils.TestCase):
         tr = self.write_pipe_transport()
         self.loop.add_writer(5, tr._write_ready)
         self.loop.add_reader(5, tr._read_ready)
-        tr._buffer = [b'da', b'ta']
+        tr._buffer.extend([b'da', b'ta'])
         tr.abort()
         self.assertFalse(m_write.called)
         self.assertFalse(self.loop.readers)
         self.assertFalse(self.loop.writers)
-        self.assertEqual([], tr._buffer)
+        self.assertEqual([], list(tr._buffer))
         self.assertTrue(tr.is_closing())
         test_utils.run_briefly(self.loop)
         self.protocol.connection_lost.assert_called_with(None)
@@ -750,7 +750,7 @@ class UnixWritePipeTransportTests(test_utils.TestCase):
 
     def test_write_eof_pending(self):
         tr = self.write_pipe_transport()
-        tr._buffer = [b'data']
+        tr._buffer.append(b'data')
         tr.write_eof()
         self.assertTrue(tr.is_closing())
         self.assertFalse(self.protocol.connection_lost.called)
