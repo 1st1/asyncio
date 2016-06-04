@@ -233,13 +233,15 @@ class Future:
         The callbacks are scheduled to be called as soon as possible. Also
         clears the callback list.
         """
-        callbacks = self._callbacks[:]
-        if not callbacks:
-            return
+        while True:
+            callbacks = self._callbacks
+            if not callbacks:
+                return
 
-        self._callbacks[:] = []
-        for callback in callbacks:
-            self._loop.call_soon(callback, self)
+            self._callbacks = []
+
+            for callback in callbacks:
+                callback(self)
 
     def cancelled(self):
         """Return True if the future was cancelled."""
