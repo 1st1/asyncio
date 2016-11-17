@@ -226,6 +226,8 @@ class StreamReaderProtocol(FlowControlMixin, protocols.Protocol):
         self._stream_writer = None
         self._client_connected_cb = client_connected_cb
         self._over_ssl = False
+        self._closed_fut = None
+        self._connection_lost = False
 
     def connection_made(self, transport):
         self._stream_reader.set_transport(transport)
@@ -249,6 +251,19 @@ class StreamReaderProtocol(FlowControlMixin, protocols.Protocol):
         self._stream_reader = None
         self._stream_writer = None
 
+        # Machinery for wait_closed.
+        self._connection_lost = True
+        closed_fut = self._closed_fut
+        # We don't want the future to be alive for too long, as
+        # it might hold a reference to an exception object,
+        # creating cycles.
+        self._closed_fut = None
+        if closed_fut:
+            if exc is None:
+                closed_fut.set_result(None)
+            else:
+                closed_fut.set_exception(exc)
+
     def data_received(self, data):
         self._stream_reader.feed_data(data)
 
@@ -260,6 +275,16 @@ class StreamReaderProtocol(FlowControlMixin, protocols.Protocol):
             # has no effect when using ssl"
             return False
         return True
+
+    @coroutine
+    def wait_closed(self):
+        if self._connection_lost:
+            return
+
+        if self._closed_fut is None:
+            self._closed_fut = self._loop.create_future()
+
+        yield from self._closed_fut
 
 
 class StreamWriter:
@@ -307,6 +332,10 @@ class StreamWriter:
 
     def get_extra_info(self, name, default=None):
         return self._transport.get_extra_info(name, default)
+
+    @coroutine
+    def wait_closed(self):
+        yield from self._protocol.wait_closed()
 
     @coroutine
     def drain(self):
